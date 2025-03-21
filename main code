@@ -1,0 +1,442 @@
+# Digivice Pedometer Game
+
+# --- Initial Setup and Input Handling ---
+extends Node2D
+
+func _ready():
+	set_process_input(true)
+	load_background()
+	load_player_sprite()
+	animate_player_sprite()
+
+# --- Game Variables ---
+var step_count = 0
+var total_steps = 0
+var battle_ready = false
+var battle_count = {}
+var selected_monster = 0
+var monster_stage = 1
+var enemy_monster = null
+var battle_ui_visible = false
+var battle_order = []
+var player_input = []
+var input_index = 0
+var timer = null
+var player_health = 10
+var enemy_health = 10
+var attack_animation = null
+var evolve_animation = null
+var menu_visible = false
+var player_sprite = null
+var enemy_sprite = null
+var background = null
+var player_health_bar = []
+var enemy_health_bar = []
+var attack_count = 0
+var number_grid = []
+var generated_code = []
+var player_code = []
+var input_boxes = []
+var display_boxes = []
+var input_active = false
+
+# Constants
+const STEPS_PER_BATTLE = 1000
+const STAGES = {1: [4, 2], 2: [6, 3], 3: [8, 4], 4: [10, 4]}  # Health, Attack per stage
+const MONSTER_COUNT = 44
+const ENEMY_MONSTERS = 176
+const TAP_POSITIONS = ["top_left", "top_right", "bottom_left", "bottom_right"]
+
+# --- Background Setup ---
+func load_background():
+	background = ColorRect.new()
+	background.color = Color(0.4, 0.6, 1)  # Light blue background
+	background.size = get_viewport_rect().size
+	add_child(background)
+	move_child(background, 0)  # Move background to the bottom layer
+
+# --- Player Sprite Setup ---
+func load_player_sprite():
+	player_sprite = ColorRect.new()
+	player_sprite.color = Color(1, 1, 1)  # White box for player
+	player_sprite.size = Vector2(100, 100)
+	player_sprite.position = Vector2(160, 200)
+	add_child(player_sprite)
+
+# --- Player Sprite Animation ---
+func animate_player_sprite():
+	var tween = create_tween()
+	tween.set_loops()
+	tween.tween_property(player_sprite, "position:y", player_sprite.position.y - 5, 0.5).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	tween.tween_property(player_sprite, "position:y", player_sprite.position.y, 0.5).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+
+# --- Health Bar Setup ---
+func load_health_bars():
+	# Player health bar
+	for i in range(10):
+		var pip = ColorRect.new()
+		pip.color = Color(1, 1, 1)  # White for filled health
+		pip.size = Vector2(6, 10)
+		pip.position = Vector2(110 + (i * 8), 310)  # Centered under player sprite
+		player_health_bar.append(pip)
+		add_child(pip)
+
+	# Enemy health bar
+	for i in range(10):
+		var pip = ColorRect.new()
+		pip.color = Color(1, 1, 1)  # White for filled health
+		pip.size = Vector2(6, 10)
+		pip.position = Vector2(260 + (i * 8), 310)  # Centered under enemy sprite
+		enemy_health_bar.append(pip)
+		add_child(pip)
+
+# --- Code Display and Attack Handling ---
+func update_code_display():
+	if generated_code.size() < 4 or display_boxes.size() < 4:
+		print("Error: Generated code or display boxes not properly initialized.")
+		return
+	for i in range(4):
+		display_boxes[i].text = str(generated_code[i])
+
+# --- Attack Animation ---
+func play_attack_animation():
+	var attack_box = ColorRect.new()
+	attack_box.color = Color(0, 1, 0)  # Green attack box
+	attack_box.size = Vector2(25, 25)  # 1/4 the size of player sprite
+	attack_box.position = Vector2(50, 220)
+	add_child(attack_box)
+	
+	var tween = create_tween()
+	tween.tween_property(attack_box, "position:x", 270, 1.5)
+	await get_tree().create_timer(1.5).timeout
+	attack_box.queue_free()
+	
+	await flash_enemy_sprite()
+	
+	enemy_health -= 3  # Apply damage only after flashing
+	update_health_display()
+	attack_count += 1
+	
+	if attack_count >= 3:
+		end_battle()
+
+# --- Health Display Update ---
+func update_health_display():
+	for i in range(10):
+		player_health_bar[i].color = Color(1, 1, 1) if i < player_health else Color(0, 0, 0)
+		enemy_health_bar[i].color = Color(1, 1, 1) if i < enemy_health else Color(0, 0, 0)
+
+# --- Flashing Effects for Enemy Sprite ---
+func flash_enemy_sprite():
+	for i in range(6):
+		await get_tree().create_timer(0.15).timeout
+		enemy_sprite.color = Color(0.5, 0, 0.5) if i % 2 == 0 else Color(1, 0, 0)
+	enemy_sprite.color = Color(1, 0, 0)  # Reset color after flashing
+	for i in range(6):
+		await get_tree().create_timer(0.15).timeout
+		enemy_sprite.color = Color(0.5, 0, 0.5) if i % 2 == 0 else Color(1, 0, 0)
+
+# --- Flashing Effects for Player Sprite ---
+func flash_player_sprite():
+	for i in range(6):
+		await get_tree().create_timer(0.15).timeout
+		player_sprite.color = Color(0.5, 0, 0.5) if i % 2 == 0 else Color(1, 1, 1)  # Ensure color resets to white
+	for i in range(6):
+		await get_tree().create_timer(0.15).timeout
+		player_sprite.color = Color(0.5, 0, 0.5) if i % 2 == 0 else Color(1, 1, 1)
+
+# --- Winner Display ---
+func show_winner(winner):
+	var winner_text = Label.new()
+	winner_text.text = winner + " Wins!"
+	winner_text.position = Vector2(100, 100)
+	winner_text.add_theme_font_size_override("font_size", 48)
+	add_child(winner_text)
+	
+	var tween = create_tween()
+	tween.tween_property(player_sprite if winner == "Player" else enemy_sprite, "scale", Vector2(2, 2), 0.5)
+	
+	await get_tree().create_timer(2.0).timeout  # Display for 2 seconds
+	winner_text.queue_free()
+	player_sprite.scale = Vector2(1, 1)
+	if enemy_sprite:
+		enemy_sprite.scale = Vector2(1, 1)
+
+# --- Enemy Attack ---
+func play_enemy_attack_animation():
+	var attack_box = ColorRect.new()
+	attack_box.color = Color(1, 0, 0)  # Red attack box for enemy
+	attack_box.size = Vector2(25, 25)  # 1/4 the size of player sprite
+	attack_box.position = Vector2(270, 220)
+	add_child(attack_box)
+	
+	var tween = create_tween()
+	tween.tween_property(attack_box, "position:x", 50, 1.5)
+	await get_tree().create_timer(1.5).timeout
+	attack_box.queue_free()
+	
+	await flash_player_sprite()
+	
+	player_health -= 3  # Apply damage only after flashing
+	update_health_display()
+	attack_count += 1
+	
+	if attack_count >= 3:
+		end_battle()
+  
+# --- End Battle Logic ---
+func end_battle():
+	await flash_enemy_sprite()  # Wait for flashing to complete
+	print("Battle over!")
+	var winner = "Player" if player_health > enemy_health else "Enemy"
+	print(winner, "wins!")
+	show_winner(winner)
+	
+	await get_tree().create_timer(2.0).timeout  # Display winner for 2 seconds
+	
+	if enemy_sprite:
+		enemy_sprite.queue_free()
+	enemy_health_bar.clear()
+	player_health_bar.clear()
+	
+	if player_sprite:
+		player_sprite.position = Vector2(160, 200)
+	
+	battle_ui_visible = false
+	await wait_for_tap()  # Wait for player tap before restarting
+	await flash_enemy_sprite()  # Wait for flashing to complete
+	print("Battle over!")
+	winner = "Player" if player_health > enemy_health else "Enemy"
+	print(winner, "wins!")
+	show_winner(winner)
+	
+	await get_tree().create_timer(2.0).timeout  # Display winner for 2 seconds
+	
+	if enemy_sprite:
+		enemy_sprite.queue_free()
+	enemy_health_bar.clear()
+	player_health_bar.clear()
+	
+	if player_sprite:
+		player_sprite.position = Vector2(160, 200)
+	
+	battle_ui_visible = false
+ 
+# --- Input Handling ---
+func _input(event):
+	if event is InputEventKey and event.pressed:
+		if event.keycode == KEY_S:  # Press "S" to add 1000 steps
+			add_steps(1000)
+		elif event.keycode == KEY_T:  # Press "T" to trigger player attack
+			player_attack()
+   
+# --- UI Update ---
+func update_ui():
+	print("Steps:", step_count, "/", STEPS_PER_BATTLE)
+	print("Total Steps:", total_steps)
+	print("Current Monster:", selected_monster, "Stage:", monster_stage)
+	print("Battles Won:", battle_count.get(selected_monster, 0), "/15")
+
+# --- Step Management ---
+func add_steps(steps):
+	step_count += steps
+	total_steps += steps
+	print("Steps added:", steps, " | Current:", step_count, "/", STEPS_PER_BATTLE)
+
+	if step_count >= STEPS_PER_BATTLE:
+		battle_ready = true
+		step_count = 0  # Reset step count
+		start_battle()
+
+	update_ui()
+
+# --- Battle Start ---
+func start_battle():
+	battle_ui_visible = true
+	attack_count = 0
+	player_health = 10
+	enemy_health = 10
+	player_sprite.position = Vector2(50, 200)  # Move player sprite to the left for battle
+	
+	enemy_sprite = ColorRect.new()
+	enemy_sprite.color = Color(1, 0, 0)  # Red box for enemy
+	enemy_sprite.size = Vector2(100, 100)
+	enemy_sprite.position = Vector2(270, 200)
+	add_child(enemy_sprite)
+	
+	load_health_bars()
+	generate_code()
+	
+	await wait_for_tap()  # Wait for user tap before showing number pad
+	show_number_pad()
+	print("Battle started!")
+
+# --- Code Generation for Battle ---
+func generate_code():
+	generated_code.clear()
+	for i in range(4):
+		generated_code.append(randi() % 9 + 1)
+	update_code_display()
+
+# --- Number Pad for Code Input ---
+func show_number_pad():
+	hide_battle_ui()  # Hide sprites and animations while inputting
+	for pip in player_health_bar:
+		pip.visible = false  # Hide player health bar
+	for pip in enemy_health_bar:
+		pip.visible = false  # Hide enemy health bar
+  
+	start_input_timer()
+	start_input_timer()
+	input_active = true
+	player_code.clear()
+	
+	# Create number grid
+	for y in range(3):
+		for x in range(3):
+			var num = y * 3 + x + 1
+			var button = Button.new()
+			button.text = str(num)
+			button.set_custom_minimum_size(Vector2(50, 50))
+			button.position = Vector2(100 + x * 55, 250 + y * 55)
+			button.connect("pressed", Callable(self, "on_number_pressed").bind(num))
+			add_child(button)
+			number_grid.append(button)
+	
+	# Create input boxes
+	for i in range(4):
+		var box = Label.new()
+		box.text = "_"
+		box.set_custom_minimum_size(Vector2(40, 40))
+		box.position = Vector2(120 + i * 45, 200)
+		add_child(box)
+		input_boxes.append(box)
+	
+	# Create display code boxes
+	for i in range(4):
+		var box = Label.new()
+		box.text = str(generated_code[i])
+		box.set_custom_minimum_size(Vector2(40, 40))
+		box.position = Vector2(120 + i * 45, 150)
+		add_child(box)
+		display_boxes.append(box)
+
+# --- Handling Number Pressed ---
+func on_number_pressed(num):
+	if not input_active:
+		return
+	
+	player_code.append(num)
+	input_boxes[len(player_code) - 1].text = str(num)
+	
+	if len(player_code) == 4:
+		check_code()
+
+# --- Check Code Logic ---
+func check_code():
+	input_active = false
+	clear_number_pad()
+	show_battle_ui()  # Restore battle visuals
+	
+	var success = player_code == generated_code
+	if success:
+		player_attack()  # Only trigger player attack if the code is correct
+	else:
+		enemy_attack()  # Only trigger enemy attack if the code is incorrect
+
+	await wait_for_tap()  # Wait for player tap before starting next round
+	input_active = false
+	
+	success = player_code == generated_code
+	clear_number_pad()
+	
+	if success:
+		player_attack()  # Trigger the player's attack again if correct code
+	else:
+		enemy_attack()  # Trigger the enemy's attack if wrong code
+  
+# --- Input Timer for Code Entry ---
+func start_input_timer():
+	timer = Timer.new()
+	timer.wait_time = 10.0  # 10-second limit
+	timer.one_shot = true
+	add_child(timer)
+	timer.connect("timeout", Callable(self, "on_input_timeout"))
+	timer.start()
+
+# --- Timeout Handling ---
+func on_input_timeout():
+	if input_active:
+		input_active = false
+		print("Time's up! Enemy attacks.")
+		clear_number_pad()
+		enemy_attack()
+
+# --- Clear Number Pad after Input ---
+func clear_number_pad():
+	for button in number_grid:
+		button.queue_free()
+	number_grid.clear()
+	
+	for box in input_boxes:
+		box.queue_free()
+	input_boxes.clear()
+	
+	for box in display_boxes:
+		box.queue_free()
+	display_boxes.clear()
+
+# --- Wait for Player Tap ---
+func wait_for_tap():
+	print("Waiting for player tap...")
+	await get_tree().create_timer(0.5).timeout  # Small delay to ensure input is processed
+
+	# Wait for a touch or mouse click or a defined input key to trigger the tap
+	while not (Input.is_action_just_pressed("ui_accept") or Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT)):
+		await(get_tree().process_frame)
+	
+	print("Player tapped, continuing...")
+
+# --- Hide Battle UI ---
+func hide_battle_ui():
+	player_sprite.visible = false
+	enemy_sprite.visible = false
+
+# --- Show Battle UI ---
+func show_battle_ui():
+	player_sprite.visible = true
+	enemy_sprite.visible = true
+	for pip in player_health_bar:
+		pip.visible = true  # Show player health bar
+	for pip in enemy_health_bar:
+		pip.visible = true  # Show enemy health bar
+  
+	for button in number_grid:
+		button.queue_free()
+	number_grid.clear()
+	
+	for box in input_boxes:
+		box.queue_free()
+	input_boxes.clear()
+	
+	for box in display_boxes:
+		box.queue_free()
+	display_boxes.clear()
+
+# --- Player and Enemy Attacks ---
+func player_attack():
+	play_attack_animation()
+	print("Player attacks!")
+	enemy_health -= 3  # Apply damage only to the enemy
+	update_health_display()
+
+	if attack_count >= 3:
+		end_battle()
+func enemy_attack():
+	play_enemy_attack_animation()
+	print("Enemy attacks!")
+	player_health -= 3  # Apply damage after animation
+	update_health_display()
+	
+	if attack_count >= 3:
+		end_battle()
